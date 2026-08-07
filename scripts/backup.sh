@@ -85,13 +85,48 @@ pg_restore -f - "$OUT" 2>/dev/null | grep -m 12 -E '^(CREATE|ALTER|SET|COMMENT)'
 }
 
 echo "== verify: table count in the dump"
-TABLES=$(grep -cE 'TABLE (DATA )?-' "$WORKDIR/toc.txt" || true)
+TABLES=$(grep -cE '[[:space:]]TABLE[[:space:]]' "$WORKDIR/toc.txt" || true)
 echo "   toc TABLE entries: $TABLES"
+
+# ---- Storage auth ------------------------------------------------------------
+# Supabase has two generations of API key. The legacy service_role key is a JWT and is sent
+# as `Authorization: Bearer`. The new-style `sb_secret_...` key is NOT a JWT, and sending it
+# as a Bearer token makes storage-api try to parse it as one and fail with
+# {"message":"Invalid Compact JWS","code":"AccessDenied"} — which is exactly how the first
+# seal run failed. Rather than hard-code a guess about which key is in the secret, probe the
+# modes against a harmless endpoint and use whichever authenticates.
+AUTH=()
+auth_for() {
+  case "$1" in
+    apikey) AUTH=(-H "apikey: $SUPABASE_SERVICE_ROLE_KEY") ;;
+    bearer) AUTH=(-H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY") ;;
+    both)   AUTH=(-H "apikey: $SUPABASE_SERVICE_ROLE_KEY"
+                  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY") ;;
+  esac
+}
+
+echo "== detecting the Storage auth mode this key needs"
+MODE=""
+for m in both apikey bearer; do
+  auth_for "$m"
+  c=$(curl -sS -o "$WORKDIR/probe.json" -w '%{http_code}' \
+        "$SUPABASE_URL/storage/v1/bucket" "${AUTH[@]}" || echo 000)
+  echo "   mode=$m -> HTTP $c"
+  if [[ "$c" == "200" ]]; then MODE="$m"; break; fi
+done
+if [[ -z "$MODE" ]]; then
+  echo "FAIL: no auth mode worked against Storage. Last response:" >&2
+  head -c 400 "$WORKDIR/probe.json" >&2; echo >&2
+  echo "The key in SUPABASE_SERVICE_ROLE_KEY does not authenticate to Storage." >&2
+  exit 1
+fi
+auth_for "$MODE"
+echo "   using auth mode: $MODE"
 
 # ---- upload to private Storage ----------------------------------------------
 echo "== ensuring bucket '$BUCKET' exists (private)"
 curl -sS -X POST "$SUPABASE_URL/storage/v1/bucket" \
-  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  "${AUTH[@]}" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"$BUCKET\",\"id\":\"$BUCKET\",\"public\":false,\"file_size_limit\":5368709120}" \
   -o "$WORKDIR/bucket.json" -w '   create-bucket HTTP %{http_code}\n' || true
@@ -100,7 +135,7 @@ grep -q '"public":true' "$WORKDIR/bucket.json" 2>/dev/null && {
 
 echo "== uploading $OBJECT"
 code=$(curl -sS -X POST "$SUPABASE_URL/storage/v1/object/$BUCKET/$OBJECT" \
-  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  "${AUTH[@]}" \
   -H "Content-Type: application/octet-stream" \
   -H "x-upsert: true" \
   --data-binary "@$OUT" \
@@ -115,7 +150,7 @@ fi
 # ---- verify the object actually landed, at the right size --------------------
 echo "== verify: object present in Storage"
 curl -sS -X POST "$SUPABASE_URL/storage/v1/object/list/$BUCKET" \
-  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  "${AUTH[@]}" \
   -H "Content-Type: application/json" \
   -d "{\"prefix\":\"${LABEL}/\",\"limit\":100,\"sortBy\":{\"column\":\"created_at\",\"order\":\"desc\"}}" \
   -o "$WORKDIR/list.json" -w '   list HTTP %{http_code}\n'

@@ -7,12 +7,18 @@
 #   2. cfb          from AIP2            — the weekly backup, run for real once
 #   3. every schema from the OLD project — public, study, docs, voice, cfb: the seal
 #
-# All three are reads. AIP2 is currently in platform-imposed read-only mode after the cfb
-# restore filled its disk, which does not block pg_dump and does not block Storage uploads.
+# All three are reads, so none of them is affected by database write state. (For the record:
+# AIP2 went briefly read-only right after the cfb restore, under platform disk-pressure
+# protection, and came back on its own about five minutes later when the disk auto-grew.)
 #
 # Robert's pause click on the old project comes AFTER leg 3 verifies. Do not pause first:
 # the dump is the thing that makes the pause safe.
 
-run: 1
+run: 2
 requested-by: clyde
-reason: genesis Job 4 — first real backups, then the archive dump of the previous project
+reason: >-
+  genesis Job 4, second attempt. Run 1 dumped correctly but every Storage call returned
+  403 {"message":"Invalid Compact JWS"} — SUPABASE_SERVICE_ROLE_KEY is a new-style
+  sb_secret_ key, which is not a JWT, so sending it as Authorization: Bearer made
+  storage-api fail parsing it. backup.sh now probes the auth modes and uses whichever
+  authenticates.
