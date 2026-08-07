@@ -133,7 +133,30 @@ on day one.
 every Storage call with `403 {"message":"Invalid Compact JWS"}`. `SUPABASE_SERVICE_ROLE_KEY` is
 a new-style `sb_secret_` key; sent as `Authorization: Bearer`, storage-api tries to parse it as
 a JWT and rejects it. `backup.sh` now probes the auth modes and uses whichever authenticates,
-so it works with either key generation.
+so it works with either key generation. The mode that works is **both headers**: `apikey`
+alongside `Authorization`.
+
+**7. A check that inverted on large input.** The seal's "does this dump contain DDL" check
+streamed `pg_restore` into `grep -m 12`. grep exits at its twelfth match and closes the pipe,
+`pg_restore` takes SIGPIPE and dies 141, and `set -o pipefail` turns that into a failure — so
+the cfb leg reported "no DDL statements found" on the line after it had printed
+`CREATE SCHEMA cfb` from that very dump. site+ops passed only because its schema emits fewer
+than twelve matching lines. A check that works on the small case and inverts on the large one
+is worse than no check. It now restores schema-only to a file and reads the file.
+
+Findings 4 and 7 are the same mistake twice: **a pipeline's exit status not meaning what the
+surrounding code assumed.** Both are fixed at the source.
+
+**8. Storage has two size limits, and the one that bites is invisible from SQL.** The bucket
+was created with a 50 GB `file_size_limit` and reports it back, and a 380 MB upload was still
+refused with `413 EntityTooLarge`. A Supabase *project* carries a separate global upload
+ceiling, lower than any bucket's, and raising it is a dashboard setting. Backups now split
+above the ceiling into parts plus a manifest (byte count, part count, sha256 of the whole
+dump); reassembly is `cat part.* > <label>.dump`, documented in `scripts/README.md`. This is
+the better property anyway: the thing that exists to survive bad days should not depend on a
+console toggle. **If Robert would rather have single-object backups**, raising the project's
+upload limit and setting `CHUNK_BYTES` above the largest dump restores that behaviour with no
+code change.
 
 ---
 
