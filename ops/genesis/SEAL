@@ -1,0 +1,18 @@
+# Genesis seal switch
+#
+# Changing this file triggers .github/workflows/genesis-seal.yml, which runs three dumps to
+# the private Storage bucket, in order:
+#
+#   1. site + ops   from AIP2            — the nightly backup, run for real once
+#   2. cfb          from AIP2            — the weekly backup, run for real once
+#   3. every schema from the OLD project — public, study, docs, voice, cfb: the seal
+#
+# All three are reads. AIP2 is currently in platform-imposed read-only mode after the cfb
+# restore filled its disk, which does not block pg_dump and does not block Storage uploads.
+#
+# Robert's pause click on the old project comes AFTER leg 3 verifies. Do not pause first:
+# the dump is the thing that makes the pause safe.
+
+run: 1
+requested-by: clyde
+reason: genesis Job 4 — first real backups, then the archive dump of the previous project
