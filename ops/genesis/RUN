@@ -1,0 +1,12 @@
+# Genesis transfer switch
+#
+# Changing this file triggers .github/workflows/genesis-transfer.yml, which moves the cfb
+# schema from the previous project into AIP2 and verifies all 46 table counts.
+#
+# The transfer is idempotent in the sense that it can be re-run, but a re-run restores over
+# an already-populated schema and pg_restore will report "already exists" errors for every
+# object. Re-run only deliberately, and read the count table at the end — that is the gate.
+
+run: 1
+requested-by: clyde
+reason: genesis Job 2 — first cfb transfer
