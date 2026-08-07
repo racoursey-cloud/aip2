@@ -123,15 +123,36 @@ fi
 auth_for "$MODE"
 echo "   using auth mode: $MODE"
 
-# ---- upload to private Storage ----------------------------------------------
-echo "== ensuring bucket '$BUCKET' exists (private)"
-curl -sS -X POST "$SUPABASE_URL/storage/v1/bucket" \
-  "${AUTH[@]}" \
-  -H "Content-Type: application/json" \
-  -d "{\"name\":\"$BUCKET\",\"id\":\"$BUCKET\",\"public\":false,\"file_size_limit\":5368709120}" \
-  -o "$WORKDIR/bucket.json" -w '   create-bucket HTTP %{http_code}\n' || true
-grep -q '"public":true' "$WORKDIR/bucket.json" 2>/dev/null && {
-  echo "FAIL: bucket $BUCKET is PUBLIC. Backups must live in a private bucket." >&2; exit 1; }
+# ---- the bucket must exist and must be private -------------------------------
+# Create-if-missing, then VERIFY. An earlier version treated a non-200 create as harmless and
+# went straight to uploading, so a create that failed 400 surfaced later and less clearly as
+# "Bucket not found" on the upload. Read the bucket back instead of assuming the create worked.
+echo "== bucket '$BUCKET'"
+code=$(curl -sS -o "$WORKDIR/bucket.json" -w '%{http_code}' \
+        "$SUPABASE_URL/storage/v1/bucket/$BUCKET" "${AUTH[@]}" || echo 000)
+if [[ "$code" != "200" ]]; then
+  echo "   not present (HTTP $code) — creating"
+  # No file_size_limit here: the API rejects a bucket limit above the project's global
+  # ceiling with a bare 400, and the bucket inherits the ceiling when the field is omitted.
+  curl -sS -X POST "$SUPABASE_URL/storage/v1/bucket" \
+    "${AUTH[@]}" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"$BUCKET\",\"id\":\"$BUCKET\",\"public\":false}" \
+    -o "$WORKDIR/create.json" -w '   create-bucket HTTP %{http_code}\n' || true
+  echo "   create response: $(head -c 300 "$WORKDIR/create.json" 2>/dev/null)"
+  code=$(curl -sS -o "$WORKDIR/bucket.json" -w '%{http_code}' \
+          "$SUPABASE_URL/storage/v1/bucket/$BUCKET" "${AUTH[@]}" || echo 000)
+fi
+if [[ "$code" != "200" ]]; then
+  echo "FAIL: bucket '$BUCKET' does not exist and could not be created (HTTP $code)." >&2
+  head -c 400 "$WORKDIR/bucket.json" >&2; echo >&2
+  exit 1
+fi
+if grep -q '"public"[[:space:]]*:[[:space:]]*true' "$WORKDIR/bucket.json"; then
+  echo "FAIL: bucket $BUCKET is PUBLIC. Backups must live in a private bucket." >&2
+  exit 1
+fi
+echo "   present and private: $(head -c 200 "$WORKDIR/bucket.json")"
 
 echo "== uploading $OBJECT"
 code=$(curl -sS -X POST "$SUPABASE_URL/storage/v1/object/$BUCKET/$OBJECT" \

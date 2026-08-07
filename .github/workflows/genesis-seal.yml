@@ -67,6 +67,8 @@ jobs:
           MIN_BYTES: '104857600'
         run: bash scripts/backup.sh archive-ai-pickens public,study,docs,voice,cfb
 
+      # Both headers, for the same reason backup.sh probes: the secret is a new-style
+      # sb_secret_ key, and Authorization alone makes storage-api try to parse it as a JWT.
       - name: List what landed in Storage
         if: always()
         run: |
@@ -74,6 +76,7 @@ jobs:
           for p in site-ops cfb archive-ai-pickens; do
             echo "--- $p"
             curl -sS -X POST "$SUPABASE_URL/storage/v1/object/list/$BACKUP_BUCKET" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
               -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"prefix\":\"$p/\",\"limit\":50}" | head -c 2000

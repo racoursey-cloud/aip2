@@ -14,11 +14,13 @@
 # Robert's pause click on the old project comes AFTER leg 3 verifies. Do not pause first:
 # the dump is the thing that makes the pause safe.
 
-run: 2
+run: 3
 requested-by: clyde
 reason: >-
-  genesis Job 4, second attempt. Run 1 dumped correctly but every Storage call returned
-  403 {"message":"Invalid Compact JWS"} — SUPABASE_SERVICE_ROLE_KEY is a new-style
-  sb_secret_ key, which is not a JWT, so sending it as Authorization: Bearer made
-  storage-api fail parsing it. backup.sh now probes the auth modes and uses whichever
-  authenticates.
+  genesis Job 4, third attempt. Run 2 got past auth (mode "both" returns 200 — the key
+  needs the apikey header alongside Authorization) and dumped correctly, then failed
+  because the bucket did not exist: POST /storage/v1/bucket returned 400, almost
+  certainly for asking for a 5 GB file_size_limit above the project ceiling, and the
+  upload then reported NoSuchBucket. The bucket is now created directly in
+  storage.buckets (private, 50 GB limit), and backup.sh reads the bucket back and fails
+  loudly instead of assuming the create worked.
