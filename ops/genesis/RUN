@@ -1,0 +1,17 @@
+# Genesis transfer switch
+#
+# Changing this file triggers .github/workflows/genesis-transfer.yml, which moves the cfb
+# schema from the previous project into AIP2 and verifies all 46 table counts.
+#
+# The transfer is idempotent in the sense that it can be re-run, but a re-run restores over
+# an already-populated schema and pg_restore will report "already exists" errors for every
+# object. Re-run only deliberately, and read the count table at the end — that is the gate.
+
+run: 2
+requested-by: clyde
+reason: >-
+  genesis Job 2, second attempt. Run 1 aborted at pg_dump ("server version mismatch",
+  client 16.14 vs server 17.6) and the job still reported success, because the step piped
+  the script through tee under `bash -e` without `pipefail` and took tee's exit code.
+  Nothing was restored. Both bugs are fixed: .github/actions/pg17 pins and verifies the
+  17 binaries, and the step now sets pipefail.

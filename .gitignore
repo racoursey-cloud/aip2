@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Backups NEVER enter git. Dumps go to the private Supabase Storage bucket.
+# This is a second line of defence behind the workflow itself.
+# ---------------------------------------------------------------------------
+backups/
+*.dump
+*.sql.gz
+*.tar.gz
+
+# ---------------------------------------------------------------------------
+# Secrets NEVER enter git. They live in Actions secrets and Supabase Vault.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# node / next
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# logs / os / editor
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
+coverage/
+.tmp/

@@ -1,0 +1,78 @@
+:root {
+  --ink: #14171a;
+  --paper: #fbfaf7;
+  --muted: #5b6169;
+  --rule: #dcd8cf;
+  --accent: #0b3d2c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ececea;
+    --paper: #14161a;
+    --muted: #9aa1aa;
+    --rule: #2b2f36;
+    --accent: #7fc9a9;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: ui-serif, Georgia, 'Times New Roman', serif;
+  line-height: 1.55;
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 5rem;
+}
+
+h1 {
+  font-size: clamp(1.9rem, 5vw, 2.6rem);
+  line-height: 1.15;
+  margin: 0 0 .35rem;
+  letter-spacing: -0.01em;
+}
+
+.kicker {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: .72rem;
+  color: var(--accent);
+  margin: 0 0 .75rem;
+}
+
+.dek { color: var(--muted); margin: 0 0 2rem; font-size: 1.05rem; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2.25rem 0; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.stat {
+  border: 1px solid var(--rule);
+  border-radius: .5rem;
+  padding: .85rem 1rem;
+}
+
+.stat .n { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+
+.note {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: .85rem;
+  color: var(--muted);
+  border-left: 3px solid var(--rule);
+  padding-left: .9rem;
+}

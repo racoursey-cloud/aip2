@@ -1,0 +1,84 @@
+name: genesis-seal
+
+# Genesis, Job 4 — prove backups are real, then take the final archive dump of the previous
+# project so it can be paused.
+#
+# Three legs, in order, each fail-loud:
+#   1. site + ops   from AIP2            — the nightly backup, run for real once
+#   2. cfb          from AIP2            — the weekly backup, run for real once
+#   3. every schema from the OLD project — the seal: public, study, docs, voice, cfb
+#
+# TEMPORARY, for the same reason as genesis-transfer.yml: `main` is empty during genesis, and
+# workflow_dispatch is only offered for workflows already on the default branch. db-backup.yml
+# is the permanent job (schedule + dispatch); this one exists to run it once, now, from a
+# branch. Delete it after genesis merges.
+
+on:
+  push:
+    paths: ['ops/genesis/SEAL']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genesis-seal
+  cancel-in-progress: false
+
+jobs:
+  seal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      SUPABASE_URL: https://kfgyzwxbxffhvckxmose.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACKUP_BUCKET: db-backups
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail loudly if the secrets are absent
+        run: |
+          set -euo pipefail
+          missing=0
+          [ -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ] || { echo "MISSING secret: SUPABASE_SERVICE_ROLE_KEY"; missing=1; }
+          [ -n "${{ secrets.DATABASE_URL }}"              ] || { echo "MISSING secret: DATABASE_URL"; missing=1; }
+          [ -n "${{ secrets.OLD_DATABASE_URL }}"          ] || { echo "MISSING secret: OLD_DATABASE_URL"; missing=1; }
+          [ "$missing" -eq 0 ] || exit 1
+          echo "All three secrets are present."
+
+      - name: Install postgresql-client 17
+        uses: ./.github/actions/pg17
+
+      - name: 1/3 — backup site + ops (AIP2)
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIN_BYTES: '2048'
+        run: bash scripts/backup.sh site-ops site,ops
+
+      - name: 2/3 — backup cfb (AIP2)
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIN_BYTES: '104857600'
+        run: bash scripts/backup.sh cfb cfb
+
+      - name: 3/3 — the seal, final archive dump of the previous project
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.OLD_DATABASE_URL }}
+          MIN_BYTES: '104857600'
+        run: bash scripts/backup.sh archive-ai-pickens public,study,docs,voice,cfb
+
+      # Both headers, for the same reason backup.sh probes: the secret is a new-style
+      # sb_secret_ key, and Authorization alone makes storage-api try to parse it as a JWT.
+      - name: List what landed in Storage
+        if: always()
+        run: |
+          set -euo pipefail
+          for p in site-ops cfb archive-ai-pickens; do
+            echo "--- $p"
+            curl -sS -X POST "$SUPABASE_URL/storage/v1/object/list/$BACKUP_BUCKET" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"prefix\":\"$p/\",\"limit\":50}" | head -c 2000
+            echo
+          done

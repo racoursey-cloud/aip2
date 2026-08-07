@@ -1,0 +1,65 @@
+name: genesis-transfer
+
+# Genesis, Job 2 — move the cfb schema whole into AIP2 and verify it row for row.
+#
+# This workflow is TEMPORARY. It exists because genesis runs on a branch while `main` is
+# still empty, and `workflow_dispatch` is only offered for workflows that already live on
+# the default branch. Triggering on a change to ops/genesis/RUN gives the transfer a
+# deliberate, auditable switch instead of firing on every commit. Once genesis is merged,
+# the dispatch trigger below is the one that matters and the push trigger can be removed.
+
+on:
+  push:
+    paths: ['ops/genesis/RUN']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genesis-transfer
+  cancel-in-progress: false
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail loudly if the transfer secrets are absent
+        run: |
+          set -euo pipefail
+          missing=0
+          [ -n "${{ secrets.OLD_DATABASE_URL }}" ] || { echo "MISSING secret: OLD_DATABASE_URL"; missing=1; }
+          [ -n "${{ secrets.DATABASE_URL }}"     ] || { echo "MISSING secret: DATABASE_URL"; missing=1; }
+          [ "$missing" -eq 0 ] || { echo "The transfer cannot run without the secrets above."; exit 1; }
+          echo "Both transfer secrets are present."
+
+      - name: Install postgresql-client 17 (the servers are 17.6)
+        uses: ./.github/actions/pg17
+
+      # `set -o pipefail` is load-bearing, not decoration. The default step shell is
+      # `bash -e`, which takes a pipeline's exit code from its LAST command — so piping the
+      # script through `tee` would report tee's success and hide the script's failure. That
+      # is exactly how the first genesis run reported a green transfer while pg_dump had
+      # aborted on a version mismatch and nothing was ever restored.
+      - name: Move cfb and verify 46 of 46
+        env:
+          OLD_DATABASE_URL: ${{ secrets.OLD_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WORKDIR: ${{ runner.temp }}/transfer
+        run: |
+          set -euo pipefail
+          bash scripts/transfer-cfb.sh 2>&1 | tee "$RUNNER_TEMP/transfer.log"
+
+      - name: Publish the count table to the run summary
+        if: always()
+        run: |
+          {
+            echo '## Genesis transfer — cfb'
+            echo
+            echo '```'
+            sed -n '/=== 6\. THE GATE/,/tables match\./p' "$RUNNER_TEMP/transfer.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,119 @@
+name: ci
+
+# Two gates on every push and pull request:
+#   1. nothing credential-shaped is tracked in the repository
+#   2. the migrations in supabase/migrations/ apply cleanly, in order, to an empty
+#      PostgreSQL 17 — the property that makes "the repo can rebuild the database" true
+#      rather than aspirational.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: no secrets in the repo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked files for credential-shaped strings
+        run: bash scripts/scan-secrets.sh
+
+  migrations:
+    name: migrations apply to an empty postgres 17
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: migrationcheck
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: migrationcheck
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql 17 client
+        uses: ./.github/actions/pg17
+
+      - name: Check migration filenames are ordered and unique
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(supabase/migrations/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "FAIL: no migrations found."; exit 1
+          fi
+          bad=0
+          for f in "${files[@]}"; do
+            b=$(basename "$f")
+            [[ "$b" =~ ^[0-9]{4}_[a-z0-9_]+\.sql$ ]] || { echo "FAIL: bad name: $b (want 0001_snake_case.sql)"; bad=1; }
+            [ -s "$f" ] || { echo "FAIL: empty migration: $b"; bad=1; }
+          done
+          dupes=$(printf '%s\n' "${files[@]}" | xargs -n1 basename | cut -d_ -f1 | sort | uniq -d)
+          [ -z "$dupes" ] || { echo "FAIL: duplicate migration numbers: $dupes"; bad=1; }
+          [ "$bad" -eq 0 ] || exit 1
+          echo "PASS: ${#files[@]} migration(s), well-named and ordered."
+
+      - name: Create the Supabase roles the migrations expect
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -c "
+            do \$\$
+            begin
+              if not exists (select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
+              if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+              if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role nologin bypassrls; end if;
+            end \$\$;"
+
+      - name: Apply every migration in order
+        run: |
+          set -euo pipefail
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "--- applying $(basename "$f")"
+            psql -v ON_ERROR_STOP=1 --single-transaction -q -f "$f"
+          done
+          echo "PASS: all migrations applied to an empty postgres 17."
+
+      - name: Report what the migrations built
+        run: |
+          set -euo pipefail
+          psql -P pager=off -c "
+            select table_schema, count(*) as tables
+            from information_schema.tables
+            where table_schema in ('site','ops') and table_type='BASE TABLE'
+            group by table_schema order by table_schema;"
+          psql -P pager=off -tAc "select count(*) from ops.working_rules;" \
+            | xargs -I{} echo "ops.working_rules seeded rows: {}"
+
+  site:
+    name: site builds
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build

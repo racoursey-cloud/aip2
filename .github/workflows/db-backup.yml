@@ -1,0 +1,94 @@
+name: db-backup
+
+# Dumps go to a PRIVATE Supabase Storage bucket. Never to git.
+#
+# Schedule follows the package: site+ops nightly (small), cfb weekly (large).
+# The `archive_old` scope is the genesis seal — one final full dump of the previous
+# project, every schema, before the Publisher pauses it.
+#
+# Every leg is fail-loud: a dump that does not parse, does not carry DDL, is
+# suspiciously small, or does not land in Storage at the right byte length fails the run.
+
+on:
+  schedule:
+    - cron: '17 7 * * *'    # nightly 07:17 UTC — site + ops
+    - cron: '43 8 * * 0'    # Sundays 08:43 UTC — cfb
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: What to dump
+        required: true
+        default: site_ops
+        type: choice
+        options: [site_ops, cfb, all, archive_old]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SUPABASE_URL: https://kfgyzwxbxffhvckxmose.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACKUP_BUCKET: db-backups
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide scope
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "43 8 * * 0" ]; then s=cfb; else s=site_ops; fi
+          else
+            s="${{ inputs.scope }}"
+          fi
+          echo "scope=$s" >> "$GITHUB_OUTPUT"
+          echo "Scope for this run: $s"
+
+      - name: Fail loudly if the required secrets are absent
+        run: |
+          set -euo pipefail
+          missing=0
+          [ -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ] || { echo "MISSING secret: SUPABASE_SERVICE_ROLE_KEY"; missing=1; }
+          if [ "${{ steps.scope.outputs.scope }}" = "archive_old" ]; then
+            [ -n "${{ secrets.OLD_DATABASE_URL }}" ] || { echo "MISSING secret: OLD_DATABASE_URL"; missing=1; }
+          else
+            [ -n "${{ secrets.DATABASE_URL }}" ] || { echo "MISSING secret: DATABASE_URL"; missing=1; }
+          fi
+          [ "$missing" -eq 0 ] || { echo "Backups cannot run without the secrets above."; exit 1; }
+          echo "All required secrets are present."
+
+      - name: Install pg_dump 17 (must match the 17.6 servers)
+        uses: ./.github/actions/pg17
+
+      - name: Dump site + ops
+        if: steps.scope.outputs.scope == 'site_ops' || steps.scope.outputs.scope == 'all'
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIN_BYTES: '2048'
+        run: bash scripts/backup.sh site-ops site,ops
+
+      - name: Dump cfb
+        if: steps.scope.outputs.scope == 'cfb' || steps.scope.outputs.scope == 'all'
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIN_BYTES: '104857600'      # 100 MB floor — cfb is ~5 GB raw
+        run: bash scripts/backup.sh cfb cfb
+
+      - name: Final archive dump of the previous project (the seal)
+        if: steps.scope.outputs.scope == 'archive_old'
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.OLD_DATABASE_URL }}
+          MIN_BYTES: '104857600'      # every schema, cfb included — hundreds of MB
+        run: bash scripts/backup.sh archive-ai-pickens public,study,docs,voice,cfb
+
+      - name: Summary
+        if: always()
+        run: echo "scope=${{ steps.scope.outputs.scope }} result=${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
