@@ -1,0 +1,39 @@
+name: Install PostgreSQL 17 client
+description: >-
+  Install the PostgreSQL 17 client and put its binaries FIRST on PATH, then prove all three
+  report 17. The GitHub runner ships a 16.x client; installing postgresql-client-17 alone is
+  not enough, because Debian's pg_wrapper can still resolve pg_dump to the older version even
+  while psql resolves to the newer one. That mismatch aborts pg_dump against a 17.6 server
+  with "server version mismatch", so this action pins the versioned bin directory and then
+  verifies rather than assuming.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        sudo install -d /usr/share/postgresql-common/pgdg
+        sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+          https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+          | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq postgresql-client-17
+        echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+    - shell: bash
+      run: |
+        set -euo pipefail
+        echo "pg_dump    $(pg_dump --version)"
+        echo "pg_restore $(pg_restore --version)"
+        echo "psql       $(psql --version)"
+        for tool in pg_dump pg_restore psql; do
+          v=$("$tool" --version | grep -oE '[0-9]+' | head -1)
+          if [ "$v" != "17" ]; then
+            echo "FAIL: $tool reports major version $v, expected 17 (servers are 17.6)." >&2
+            exit 1
+          fi
+        done
+        echo "PASS: pg_dump, pg_restore and psql all report 17."

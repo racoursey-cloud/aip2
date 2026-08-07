@@ -41,6 +41,12 @@ if [[ "$port" == "6543" ]]; then
   exit 1
 fi
 
+# A 16.x client cannot dump a 17.6 server; it aborts on version mismatch.
+for tool in pg_dump pg_restore; do
+  v="$("$tool" --version | grep -oE '[0-9]+' | head -1)"
+  [[ "$v" == "17" ]] || { echo "FAIL: $tool is major version $v; the servers are 17.x. Refusing to run." >&2; exit 1; }
+done
+
 mkdir -p "$WORKDIR"
 STAMP="${STAMP:-$(date -u +%Y/%m/%Y%m%dT%H%M%SZ)}"
 OUT="$WORKDIR/${LABEL}.dump"
@@ -87,7 +93,7 @@ echo "== ensuring bucket '$BUCKET' exists (private)"
 curl -sS -X POST "$SUPABASE_URL/storage/v1/bucket" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"$BUCKET\",\"id\":\"$BUCKET\",\"public\":false}" \
+  -d "{\"name\":\"$BUCKET\",\"id\":\"$BUCKET\",\"public\":false,\"file_size_limit\":5368709120}" \
   -o "$WORKDIR/bucket.json" -w '   create-bucket HTTP %{http_code}\n' || true
 grep -q '"public":true' "$WORKDIR/bucket.json" 2>/dev/null && {
   echo "FAIL: bucket $BUCKET is PUBLIC. Backups must live in a private bucket." >&2; exit 1; }

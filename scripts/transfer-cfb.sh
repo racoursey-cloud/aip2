@@ -30,6 +30,14 @@ for url in "$OLD_DATABASE_URL" "$DATABASE_URL"; do
   [[ "$p" == "6543" ]] && { echo "FAIL: port 6543 is transaction-mode; pg_dump/pg_restore need session mode (5432)." >&2; exit 1; }
 done
 
+# pg_dump refuses to dump from a server newer than itself. Both projects run 17.6, so a 16.x
+# client aborts at the first byte. Check here too, not only in CI: the first genesis run had
+# psql on 17 and pg_dump still on 16, and the mismatch was only visible in the dump's stderr.
+for tool in pg_dump pg_restore psql; do
+  v="$("$tool" --version | grep -oE '[0-9]+' | head -1)"
+  [[ "$v" == "17" ]] || { echo "FAIL: $tool is major version $v; the servers are 17.x. Refusing to run." >&2; exit 1; }
+done
+
 COUNT_SQL="select t.tablename,
   (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from cfb.%I', t.tablename), false, true, '')))[1]::text::bigint
 from pg_tables t where t.schemaname='cfb' order by 1;"
