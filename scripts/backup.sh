@@ -78,11 +78,20 @@ pg_restore -l "$OUT" > "$WORKDIR/toc.txt"
 echo "   parse exit : 0"
 echo "   toc entries: $(wc -l < "$WORKDIR/toc.txt")"
 
+# The custom-format equivalent of 'zcat | head'. Restore the SCHEMA ONLY to a file and read
+# that, rather than streaming the whole dump into a head/grep: with `set -o pipefail`, a
+# reader that stops early closes the pipe, pg_restore dies of SIGPIPE, and the pipeline
+# reports 141 — which reads as "no DDL in the dump" for a dump that is perfectly fine. That
+# is exactly how the cfb leg failed while printing CREATE SCHEMA cfb one line above the error.
+# Schema-only output is small even for a 5 GB dump, so this costs nothing.
 echo "== verify: DDL head (the custom-format equivalent of 'zcat | head')"
-pg_restore -f - "$OUT" 2>/dev/null | grep -m 12 -E '^(CREATE|ALTER|SET|COMMENT)' || {
+pg_restore --schema-only -f "$WORKDIR/ddl.sql" "$OUT" 2>/dev/null || true
+if [[ ! -s "$WORKDIR/ddl.sql" ]] || ! grep -qE '^(CREATE|ALTER)' "$WORKDIR/ddl.sql"; then
   echo "FAIL: no DDL statements found in the dump." >&2
   exit 1
-}
+fi
+echo "   DDL lines: $(grep -cE '^(CREATE|ALTER)' "$WORKDIR/ddl.sql")"
+{ grep -E '^(CREATE|ALTER)' "$WORKDIR/ddl.sql" | head -12 | sed 's/^/   /'; } || true
 
 echo "== verify: table count in the dump"
 TABLES=$(grep -cE '[[:space:]]TABLE[[:space:]]' "$WORKDIR/toc.txt" || true)

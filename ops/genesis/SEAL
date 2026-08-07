@@ -14,13 +14,13 @@
 # Robert's pause click on the old project comes AFTER leg 3 verifies. Do not pause first:
 # the dump is the thing that makes the pause safe.
 
-run: 3
+run: 4
 requested-by: clyde
 reason: >-
-  genesis Job 4, third attempt. Run 2 got past auth (mode "both" returns 200 — the key
-  needs the apikey header alongside Authorization) and dumped correctly, then failed
-  because the bucket did not exist: POST /storage/v1/bucket returned 400, almost
-  certainly for asking for a 5 GB file_size_limit above the project ceiling, and the
-  upload then reported NoSuchBucket. The bucket is now created directly in
-  storage.buckets (private, 50 GB limit), and backup.sh reads the bucket back and fails
-  loudly instead of assuming the create worked.
+  genesis Job 4, fourth attempt. Run 3 uploaded site+ops successfully (29,092 bytes, in
+  the bucket, verified) and then failed the cfb leg on a false negative of my own making:
+  the DDL check streamed pg_restore into `grep -m 12`, grep exited at its twelfth match,
+  pg_restore died of SIGPIPE, and `set -o pipefail` turned that into "no DDL statements
+  found" — one line after the check had printed CREATE SCHEMA cfb. site+ops survived only
+  because it has fewer than twelve matching lines. The check now restores schema-only to
+  a file and reads the file, with no pipe to break.
