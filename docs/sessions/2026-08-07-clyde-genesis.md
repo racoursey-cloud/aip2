@@ -76,8 +76,32 @@ repository can discuss `postgres://` in the open and still fail a build on a pas
 
 ### Job 4 — backups and the seal
 
-Recorded in the status note; the seal's own run reports the three dumps, their byte sizes,
-their parse results and the Storage objects.
+| check | expected | actual | verdict |
+|---|---|---|---|
+| site+ops backup | dumped, parsed, in Storage | 29,092 bytes, parse exit 0, 90 toc entries, 19 tables | PASS |
+| cfb backup | dumped, parsed, in Storage | 398,373,090 bytes (380 MB), parse exit 0, 262 toc entries, 242 DDL lines, 92 tables, 10 parts + manifest | PASS |
+| **archive dump of the old project** | every schema, size above floor, parse clean | **400,640,265 bytes (382 MB)**, parse clean, 11 objects, sha256 `877ff9d1…85dd6f` | PASS |
+| archive covers all five schemas | public, study, docs, voice, cfb | all five passed to `pg_dump` in one invocation | PASS |
+| size floor | research ≈10 MB compressed; with cfb, hundreds of MB | 382 MB | PASS |
+| bucket private | private | `"public":false`, 50 GB `file_size_limit` | PASS |
+| dumps never in git | never | `.gitignore` blocks `backups/`, `*.dump`; nothing dump-shaped tracked | PASS |
+| old project paused | Robert's click | **NOT DONE — his click** | OPEN |
+| old repo archived | archived badge | **NOT DONE — his click** | OPEN |
+
+Storage now holds, in the private `db-backups` bucket:
+
+    site-ops/2026/08/…-site-ops.dump                     87 kB across 3 runs
+    cfb/2026/08/…-cfb.parts/                            380 MB, 10 parts + manifest
+    archive-ai-pickens/2026/08/…-archive-ai-pickens.parts/  382 MB, 11 parts + manifest
+
+**The two remaining items are deliberately left for Robert**, on the project's own authority:
+working rule `fabio-does-not-apply` says *"Infrastructure clicks — projects, repos, spend,
+credentials — are the Publisher's even when the spend is pre-approved."* Pausing the old
+project and archiving the old repo are both that. The assignment says the same for the pause
+("his click, not yours"), and allows the repo archive to be mine only if the API takes it —
+this session's GitHub scope does not include `racoursey-cloud/ai-pickens`, so it would not.
+Nothing is at risk in waiting: the archive dump is taken and verified, which is the thing that
+makes sealing safe.
 
 ---
 
