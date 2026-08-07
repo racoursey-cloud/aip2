@@ -14,13 +14,13 @@
 # Robert's pause click on the old project comes AFTER leg 3 verifies. Do not pause first:
 # the dump is the thing that makes the pause safe.
 
-run: 4
+run: 5
 requested-by: clyde
 reason: >-
-  genesis Job 4, fourth attempt. Run 3 uploaded site+ops successfully (29,092 bytes, in
-  the bucket, verified) and then failed the cfb leg on a false negative of my own making:
-  the DDL check streamed pg_restore into `grep -m 12`, grep exited at its twelfth match,
-  pg_restore died of SIGPIPE, and `set -o pipefail` turned that into "no DDL statements
-  found" — one line after the check had printed CREATE SCHEMA cfb. site+ops survived only
-  because it has fewer than twelve matching lines. The check now restores schema-only to
-  a file and reads the file, with no pipe to break.
+  genesis Job 4, fifth attempt. Run 4 fixed the DDL check (242 DDL lines, 92 tables, parse
+  exit 0 on a 380 MiB cfb dump) and then hit a real platform limit rather than a bug:
+  the upload returned 413 EntityTooLarge. A Supabase project has a GLOBAL upload ceiling
+  separate from the per-bucket file_size_limit — the bucket allows 50 GB and 380 MB was
+  still refused. Raising it is a dashboard setting, so backup.sh now splits anything above
+  the ceiling into parts with a manifest carrying the whole dump's sha256, which makes the
+  backups independent of that setting entirely.

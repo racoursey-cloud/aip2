@@ -163,49 +163,103 @@ if grep -q '"public"[[:space:]]*:[[:space:]]*true' "$WORKDIR/bucket.json"; then
 fi
 echo "   present and private: $(head -c 200 "$WORKDIR/bucket.json")"
 
-echo "== uploading $OBJECT"
-code=$(curl -sS -X POST "$SUPABASE_URL/storage/v1/object/$BUCKET/$OBJECT" \
-  "${AUTH[@]}" \
-  -H "Content-Type: application/octet-stream" \
-  -H "x-upsert: true" \
-  --data-binary "@$OUT" \
-  -o "$WORKDIR/upload.json" -w '%{http_code}')
-echo "   upload HTTP $code"
-if [[ "$code" != "200" ]]; then
-  echo "FAIL: upload did not return 200. Response:" >&2
-  cat "$WORKDIR/upload.json" >&2; echo >&2
-  exit 1
+# ---- upload ------------------------------------------------------------------
+# A Supabase project has a GLOBAL upload ceiling that is separate from, and lower than, any
+# per-bucket file_size_limit: the bucket here allows 50 GB and a 380 MB object still came
+# back 413 EntityTooLarge. Raising that ceiling is a dashboard setting. Rather than make the
+# backups depend on it, anything above the ceiling is split into parts and uploaded
+# alongside a manifest. Reassembly is `cat part.* > <label>.dump`, which pg_restore reads
+# directly — the manifest carries the sha256 of the whole dump so reassembly is checkable.
+CHUNK_BYTES="${CHUNK_BYTES:-40000000}"
+
+upload_one() {  # <local file> <object path>
+  local f="$1" obj="$2" c
+  c=$(curl -sS -X POST "$SUPABASE_URL/storage/v1/object/$BUCKET/$obj" \
+        "${AUTH[@]}" \
+        -H "Content-Type: application/octet-stream" \
+        -H "x-upsert: true" \
+        --data-binary "@$f" \
+        -o "$WORKDIR/up.json" -w '%{http_code}') || c=000
+  if [[ "$c" != "200" ]]; then
+    echo "FAIL: upload of $obj returned HTTP $c" >&2
+    head -c 400 "$WORKDIR/up.json" >&2; echo >&2
+    return 1
+  fi
+  return 0
+}
+
+SHA=$(sha256sum "$OUT" | cut -d' ' -f1)
+
+if (( BYTES <= CHUNK_BYTES )); then
+  PREFIX="${LABEL}/${STAMP}-${LABEL}"
+  OBJECT="${PREFIX}.dump"
+  echo "== uploading $OBJECT (single object, $BYTES bytes)"
+  upload_one "$OUT" "$OBJECT" || exit 1
+  # The list endpoint lists ONE level: a prefix of "cfb/" returns the folder "2026", not the
+  # object. The prefix has to be the directory the object actually sits in.
+  LISTPREFIX="${LABEL}/$(dirname "$STAMP")/"
+  EXPECT_NAME="$(basename "$OBJECT")"
+  PARTS=1
+else
+  PREFIX="${LABEL}/${STAMP}-${LABEL}.parts"
+  echo "== $BYTES bytes is above the ${CHUNK_BYTES}-byte upload ceiling — splitting"
+  ( cd "$WORKDIR" && split -b "$CHUNK_BYTES" -d -a 4 "$OUT" part. )
+  PARTS=$(find "$WORKDIR" -maxdepth 1 -name 'part.*' | wc -l | tr -d ' ')
+  echo "   $PARTS parts"
+  i=0
+  for p in "$WORKDIR"/part.*; do
+    i=$((i+1))
+    upload_one "$p" "$PREFIX/$(basename "$p")" || exit 1
+    printf '   uploaded %s (%s/%s)\n' "$(basename "$p")" "$i" "$PARTS"
+  done
+  printf '{"label":"%s","stamp":"%s","schemas":"%s","bytes":%s,"parts":%s,"sha256":"%s","reassemble":"cat part.* > %s.dump && pg_restore ..."}\n' \
+    "$LABEL" "$STAMP" "$SCHEMAS" "$BYTES" "$PARTS" "$SHA" "$LABEL" > "$WORKDIR/manifest.json"
+  upload_one "$WORKDIR/manifest.json" "$PREFIX/manifest.json" || exit 1
+  echo "   uploaded manifest.json"
+  LISTPREFIX="$PREFIX/"
+  EXPECT_NAME=""
 fi
 
-# ---- verify the object actually landed, at the right size --------------------
-echo "== verify: object present in Storage"
+# ---- verify what actually landed, by byte length -----------------------------
+echo "== verify: objects present in Storage"
 curl -sS -X POST "$SUPABASE_URL/storage/v1/object/list/$BUCKET" \
   "${AUTH[@]}" \
   -H "Content-Type: application/json" \
-  -d "{\"prefix\":\"${LABEL}/\",\"limit\":100,\"sortBy\":{\"column\":\"created_at\",\"order\":\"desc\"}}" \
+  -d "{\"prefix\":\"${LISTPREFIX}\",\"limit\":1000}" \
   -o "$WORKDIR/list.json" -w '   list HTTP %{http_code}\n'
 
-REMOTE=$(python3 -c "
+REMOTE=$(python3 - "$WORKDIR/list.json" "$EXPECT_NAME" <<'PY' || echo ''
 import json,sys
-d=json.load(open('$WORKDIR/list.json'))
-tgt='$(basename "$OBJECT")'
-for o in d if isinstance(d,list) else []:
-    if o.get('name')==tgt:
-        print((o.get('metadata') or {}).get('size',''))
-        sys.exit(0)
-print('')
-" 2>/dev/null || echo '')
+path,expect = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(path))
+except Exception:
+    print(''); raise SystemExit
+if not isinstance(d, list):
+    print(''); raise SystemExit
+total = 0
+for o in d:
+    n = o.get('name') or ''
+    if expect:
+        if n != expect: continue
+    elif not n.startswith('part.'):
+        continue
+    total += int((o.get('metadata') or {}).get('size') or 0)
+print(total)
+PY
+)
 
-if [[ -z "$REMOTE" ]]; then
-  echo "WARN: could not read the object size back from the list API; object listing follows:" >&2
+if [[ -z "$REMOTE" || "$REMOTE" == "0" ]]; then
+  echo "FAIL: could not read back any uploaded bytes. Listing follows:" >&2
   head -c 600 "$WORKDIR/list.json" >&2; echo >&2
-else
-  echo "   remote bytes: $REMOTE (local $BYTES)"
-  if [[ "$REMOTE" != "$BYTES" ]]; then
-    echo "FAIL: uploaded size $REMOTE does not match local size $BYTES." >&2
-    exit 1
-  fi
+  exit 1
+fi
+echo "   remote bytes: $REMOTE (local $BYTES)"
+if [[ "$REMOTE" != "$BYTES" ]]; then
+  echo "FAIL: uploaded bytes $REMOTE do not match the dump's $BYTES." >&2
+  exit 1
 fi
 
 echo
-echo "PASS: $LABEL — $BYTES bytes, parse clean, uploaded to $BUCKET/$OBJECT"
+echo "PASS: $LABEL — $BYTES bytes in $PARTS object(s), parse clean, sha256 $SHA"
+echo "      at $BUCKET/$LISTPREFIX"
