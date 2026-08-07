@@ -36,7 +36,7 @@ RATIFIED. Checked before executing, because a draft would have been held.
 | credential-shaped scan | clean | 29 files, 8 patterns, no match | PASS |
 | repo public | unauthenticated README fetch | HTTP 200, 2,270 bytes | PASS |
 | repo public | unauthenticated `git ls-remote` | succeeds with no credentials | PASS |
-| workflows in Actions | 2 named | 4 present (`ci`, `db-backup`, `genesis-transfer`, `genesis-seal`) | PASS |
+| workflows in Actions | 2 named | 4 during genesis (`ci`, `db-backup`, and two genesis-only ones since removed) | PASS |
 | CI: no secrets | green | success | PASS |
 | CI: migrations on empty PG17 | green | success | PASS |
 | CI: site builds | green | success | PASS |
@@ -187,11 +187,20 @@ code change.
 ## What is open, ranked
 
 1. **A ruling on `cfbd-sync`** — repair it or retire it (finding 3).
-2. **Merge to `main`.** Genesis is on `claude/assignment-clyde-genesis-ed85g6`. Until it lands,
-   `main` is empty, which is why `genesis-transfer.yml` and `genesis-seal.yml` carry push
-   triggers on sentinel files: `workflow_dispatch` is only offered for workflows already on the
-   default branch. Both are temporary and should be deleted after the merge, leaving
-   `db-backup.yml` as the permanent scheduled job.
+2. **Merge PR #1, and set `main` as the default branch.** The repository was created empty, so
+   the first branch pushed became the default and `main` did not exist; it is now an empty root
+   commit, and this branch was rebased onto it so a pull request could be opened at all
+   (GitHub refuses one across unrelated histories). Setting the default is a repository settings
+   write, which this session's token is blocked from.
+
+   During genesis, two temporary workflows — `genesis-transfer.yml` and `genesis-seal.yml` —
+   carried push triggers on sentinel files under `ops/genesis/`, because `workflow_dispatch` is
+   only offered for workflows already on the default branch and `main` was empty. Both have run
+   and been verified, and **both have been removed along with their sentinels.** Nothing is
+   lost: `db-backup.yml` covers all three of their jobs through its `scope` input
+   (`site_ops`, `cfb`, `all`, `archive_old`), and the cfb transfer was one-time. The verified
+   procedure itself survives in `scripts/transfer-cfb.sh` and `scripts/backup.sh`, which take
+   their targets from the environment and are not genesis-specific.
 3. **Robert's two clicks**, after the seal's archive dump verifies: pause the old project, and
    archive the old repo.
 4. **Correct the seed's pin table** to exact counts, so the next reader is not misled (finding 1).
